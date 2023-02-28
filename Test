@@ -1,78 +1,371 @@
-local plyrs = game:GetService("Players")
-local rs = game:GetService("RunService")
-local uis = game:GetService("UserInputService")
 local cam = workspace.Camera
-local headset
 local p
+local headObject
+local events = {}
 
-local bodybinds = {
-	[Enum.KeyCode.Q] = "lHand",
-	[Enum.KeyCode.E] = "rHand",
-	[Enum.KeyCode.W] = Vector3.new(0, 1, 0),
-	[Enum.KeyCode.A] = Vector3.new(-1, 0, 0),
-	[Enum.KeyCode.S] = Vector3.new(0, -1, 0),
-	[Enum.KeyCode.D] = Vector3.new(1, 0, 0),
-	[Enum.KeyCode.F] = false,
-	[Enum.KeyCode.G] = true,
-	[Enum.KeyCode.LeftShift] = 1,
-	[Enum.KeyCode.LeftControl] = 2,
-	[Enum.KeyCode.LeftAlt] = 3
+local controls = {
+	[Enum.UserInputType.MouseButton1] = {"move", "leftHand"},
+	[Enum.UserInputType.MouseMovement] = {"updateTarget"}, -- do not change
+	[Enum.UserInputType.MouseWheel] = {"adjustOffset"},
+	[Enum.UserInputType.MouseButton2] = {"move", "rightHand"},
+	[Enum.KeyCode.W] = {"move", "head", Vector3.new(0, 1, 0)},
+	[Enum.KeyCode.A] = {"move", "head", Vector3.new(-1, 0, 0)},
+	[Enum.KeyCode.S] = {"move", "head", Vector3.new(0, -1, 0)},
+	[Enum.KeyCode.D] = {"move", "head", Vector3.new(1, 0, 0)},
+	[Enum.KeyCode.Q] = {"move", "head", Vector3.new(0, 0, -1)},
+	[Enum.KeyCode.E] = {"move", "head", Vector3.new(0, 0, 1)},
+	[Enum.KeyCode.LeftShift] = {"gesture", "Fist"},
+	[Enum.KeyCode.LeftControl] = {"gesture", "Index"},
+	[Enum.KeyCode.LeftAlt] = {"gesture", "Thumb"},
+	[Enum.KeyCode.Z] = {"toggle", "canOffset"},
+	[Enum.KeyCode.R] = {"toggle", "rotationManager"},
+	[Enum.KeyCode.Tab] = {"selectAxis", "rotationManager"},
+	[Enum.KeyCode.Left] = {"updateAxisMover", "rotationManager", -1},
+	[Enum.KeyCode.Right] = {"updateAxisMover", "rotationManager", 1}
 }
 
-local gesturebinds = {
-	"Fist",
-	"Index",
-	"Thumb"
-}
+local services = {}
 
-local body = setmetatable({ -- least fav part of the script
-	lastHand = "",
-	lHand = {
-		false,
-		CFrame.new(-math.cos(math.pi / 4), -0.5, -math.sin(math.pi / 4)),
-		0
-	},
-	rHand = {
-		false,
-		CFrame.new(-math.cos(3 * math.pi / 4), -0.5, -math.sin(3 * math.pi / 4)),
-		0
-	}
-}, {
-	__call = function(t, k, mult)
-		mult = mult or 1
-
-		local bind = bodybinds[k]
-		if bind and headset then
-			if typeof(bind) == "string" then
-				t[bind][1] = mult > 0
-				
-				lastHand = mult > 0 and bind or lastHand
-				
-			elseif typeof(bind) == "Vector3" then
-				headset.StickPosition += bind * mult
-			elseif typeof(bind) == "boolean" then
-				headset.Stick2 = mult > 0 and bind and 1 or 0
-			elseif typeof(bind) == "number" and lastHand:len() > 0 then
-				local gesture = lastHand:sub(1,1)..gesturebinds[bind]
-			
-				if mult > 0 then
-					headset[gesture] = headset[gesture] == 0 and 1 or 0
-				end
-			end
-		end
+setmetatable(services, {
+	__index = function(t, k)
+		services[k] = rawget(services, k) or game:GetService(k)
+		return services[k]
 	end
 })
 
+local function angleBetween(vecx, vecy)
+	return math.acos(vecx:Dot(vecy))
+end
+
+local hand = {}
+hand.__index = hand
+
+function hand:gesture(gestureName, keyState)
+	if keyState ~= 1 then
+		return
+	end
+
+	headObject.realHeadset[self.id .. gestureName] = 1 - headObject.realHeadset[self.id .. gestureName]
+end
+
+function hand:getMouseRay()
+	local mousePos = services.UserInputService:GetMouseLocation()
+	return CFrame.new(cam:ViewportPointToRay(mousePos.x, mousePos.y).Direction * (1.5 + headObject.handOffset))
+end
+
+function hand:calculateEndRotation()
+	return CFrame.Angles(cam.CFrame:ToEulerAnglesXYZ()) * CFrame.Angles(self.rotation[1] * (math.pi/6), self.rotation[2] * (math.pi/6), self.rotation[3] * (math.pi/6))
+end
+
+function hand:updateTarget()
+
+	local camLook = (cam.CFrame.lookVector * Vector3.new(1,0,1)).unit
+	
+	local theta = angleBetween(Vector3.new(-1, 0, 0), camLook)
+	theta = camLook.z > 0 and (2 * math.pi) - theta or theta
+
+	local relativeAngle = (self.id == "l" and -headObject.handAngle or headObject.handAngle)
+	local startPosition = CFrame.new(-math.cos(theta + relativeAngle), -0.5, -math.sin(theta + relativeAngle)) + (camLook * headObject.handOffset)
+
+	self.targetPosition = startPosition:Lerp(self:getMouseRay(), self.alpha) * self:calculateEndRotation()
+	
+	self.replicatePosition:Fire()
+end
+
+function hand:beginMove(minAlpha, maxAlpha)
+	local distAlpha = (maxAlpha - minAlpha) / 2
+
+	self.moving = true
+	repeat
+		services.RunService.RenderStepped:wait()
+		self:updateTarget()
+		self.alpha += self.alphaMultiplier
+	until math.abs(self.alpha - minAlpha) < 0.05 or math.abs(maxAlpha - self.alpha) < 0.05 or self.alpha ~= self.alpha
+	
+	if self.alpha ~= self.alpha then
+		self.alpha = 0
+	end
+	
+	self.moving = false
+end
+
+function hand:move(keyState)
+
+	if headObject.rotationManager.active then
+		if self.id == "l" then
+			headObject.rotationManager.held = keyState == 1
+			
+			headObject.rotationManager.selectedAxis = 0
+		end
+		return
+	end
+
+	self.alphaMultiplier = keyState == 1 and 0.05 or -0.05
+	
+	if not self.moving and not (keyState == 1 and self.alpha >= 1) then
+		if keyState == 1 then
+			headObject.recentHand = self
+		end
+	
+		self:beginMove(0, 1)
+	end
+end
+
+function hand:new(direction, realHand)
+	local newHand = setmetatable({direction = direction, realHand = realHand}, hand)
+	newHand.alpha = 0
+	newHand.alphaMultiplier = 0.05
+	newHand.id = direction and "r" or "l"
+	newHand.targetPosition = CFrame.new()
+	newHand.moving = false
+	newHand.rotation = {0, 0, 0}
+	newHand.replicatePosition = Instance.new("BindableEvent")
+	newHand.replicatePosition.Event:connect(function()
+		events.UserCFrameChanged:Fire(newHand.direction and Enum.UserCFrame.RightHand or Enum.UserCFrame.LeftHand, newHand.targetPosition)
+	end)
+	
+	return newHand
+end
+
+local head = {}
+head.__index = head
+
+function head:handleInput(input, keyState)
+	local bind = controls[input.KeyCode] or controls[input.UserInputType]
+	
+	if bind then
+		if bind[1] == "updateTarget" and not self.rotationManager.active then
+			self.leftHand:updateTarget()
+			self.rightHand:updateTarget()
+		elseif bind[2] and type(self[bind[2]]) == "table" then
+			self[bind[2]][bind[1]](self[bind[2]], keyState, bind[3])
+		elseif bind[3] then
+			self[bind[1]](self, bind[3], keyState)
+		elseif bind[2] and self.recentHand[bind[1]] then
+			self.recentHand[bind[1]](self.recentHand, bind[2], keyState)
+		else
+			self[bind[1]](self, bind[2], keyState)
+		end
+	end
+end
+
+function head:adjustOffset(_, keyState)
+	if self.canOffset then		
+		self.handOffset += keyState * 0.04
+		self.leftHand:updateTarget()
+		self.rightHand:updateTarget()
+	end
+end
+
+function head:move(vec, keyState)
+	if vec.z ~= 0 then
+		self.realHeadset.Stick2 = math.clamp(self.realHeadset.Stick2 + (vec.z * keyState), -1, 1)
+	else
+		self.realHeadset.StickPosition += Vector3.new(vec.x, vec.y, 0) * keyState
+	end
+end
+
+function head:freezeCam(b)
+	local dist = (self.realHeadset.Head.PrimaryPart.Position - cam.CFrame.p).magnitude
+		
+	p.CameraMinZoomDistance = b and dist or 0.5
+	p.CameraMaxZoomDistance = b and dist or 128
+end
+
+function head:toggle(stat, keyState)
+	if keyState ~= 1 then
+		return
+	end
+
+	self[stat] = not self[stat]
+	
+	if stat == "canOffset" then
+		self:freezeCam(self[stat])
+	end
+end
+
+local rotation = {}
+rotation.__index = rotation
+
+function rotation:new()
+	local newRotation = setmetatable({}, rotation)
+	
+	newRotation.rotationLookup = {{}, {}, {}}
+	newRotation.lineLookup = {{}, {}, {}}
+	newRotation.active = false
+	newRotation.held = false
+	newRotation.selectedAxis = 0
+	newRotation.angleLookup = {1, 1, 1}
+	
+	for i=1,3 do
+		local ref = {}
+		ref[i] = function() return 0 end
+		ref[i + 1 > 3 and ((i + 1) % 4) + 1 or i + 1] = math.cos
+		ref[i + 2 > 3 and ((i + 2) % 4) + 1 or i + 2] = math.sin
+		
+		local color = Color3.fromRGB(i == 1 and 255 or 0, i == 2 and 255 or 0, i == 3 and 255 or 0)
+		
+		for j=1,13 do
+			if j < 13 then
+				local step = math.pi * (j/6)
+				newRotation.rotationLookup[i][j] = Vector3.new(ref[1](step), ref[2](step), ref[3](step))
+			end
+			
+			local line = Drawing.new("Line")
+			line.Visible = true
+			line.Thickness = 5
+			line.Color = color
+			newRotation.lineLookup[i][j] = line
+		end
+		
+		local circle = Drawing.new("Circle")
+		circle.Visible = true
+		circle.Color = color
+		circle.Filled = true
+		circle.Radius = 10
+		circle.Position = Vector2.new(-2000, -2000)
+		newRotation.lineLookup[i][14] = circle
+		
+		local text = Drawing.new("Text")
+		text.Visible = true
+		text.Font = Drawing.Fonts.System
+		text.Size = 18
+		text.Color = Color3.new():lerp(color, 0.3)
+		text.Outline = false
+		newRotation.lineLookup[i][15] = text
+	end
+	
+	return newRotation
+end
+
+function rotation:selectAxis(keyState)
+	self.tabActivated = keyState == 1
+	if self.tabActivated then
+		self.selectedAxis = math.clamp((self.selectedAxis + 1) % 4, 1, 3)
+	end
+end 
+
+function rotation:toggle(keyState)
+	if keyState == 1 and headObject.recentHand.alpha < 0.05 and not self.held then
+		self.active = not self.active
+		
+		if not self.active then
+			self:updateAxes(0)
+			self.selectedAxis = 0
+			self.held = false
+			headObject.recentHand:updateTarget()
+		end
+	end
+end
+
+function rotation:updateAxes(visibleOverride)
+	local basePos = headObject.recentHand.realHand.Base.Position
+	local basePoint = cam:WorldToViewportPoint(basePos)
+
+	for i=1,3 do
+		for j=1,12 do
+			local vec, visible = cam:WorldToViewportPoint(basePos + (self.rotationLookup[i][j] * 10))
+			local vec2, visible2 = cam:WorldToViewportPoint(basePos + ((self.rotationLookup[i][j + 1] or self.rotationLookup[i][1]) * 10))
+			
+			local line = self.lineLookup[i][j]
+			
+			line.Transparency = visibleOverride or ((visible and visible2) and 1 or 0)
+			line.From = Vector2.new(vec.x, vec.y)
+			line.To = Vector2.new(vec2.x, vec2.y)
+		end
+		local axisRotation = headObject.recentHand.rotation[i]
+		
+		local axisMover = self.lineLookup[i][13]
+		local axisCircle = self.lineLookup[i][14]
+		local axisText = self.lineLookup[i][15]
+		
+		axisMover.From = Vector2.new(basePoint.x, basePoint.y)
+		axisMover.To = self.lineLookup[i][math.clamp(axisRotation < 1 and 12 or axisRotation, 1, 12)].From -- sorry, lazy
+		axisMover.Transparency = visibleOverride or 1
+		
+		axisCircle.Position = self.lineLookup[i][13].To
+		axisCircle.Transparency = visibleOverride or 1
+		
+		
+		
+		axisText.Position = self.lineLookup[2][3].From + axisText.TextBounds
+		axisText.Text = string.char(87 + self.selectedAxis) .. ": " .. math.deg(axisRotation * (math.pi / 6))
+		axisText.Transparency = visibleOverride or ((self.held or self.tabActivated) and self.selectedAxis == i and 1 or 0)
+		
+		local mousePos = services.UserInputService:GetMouseLocation()
+		if self.held and (self.lineLookup[i][14].Position - mousePos).magnitude < 10 and self.selectedAxis == 0 then
+			self.selectedAxis = i
+		end
+	end
+end
+
+function rotation:updateAxisMover(keyState, direction)
+	if keyState and direction then
+		if self.tabActivated and keyState == 1 then
+			headObject.recentHand.rotation[self.selectedAxis] = (headObject.recentHand.rotation[self.selectedAxis] + direction) % 12
+			headObject.recentHand:updateTarget()
+		end
+		return
+	end
+
+	if self.selectedAxis ~= 0 then
+		local mousePos = services.UserInputService:GetMouseLocation()
+		
+		local circlePos = self.lineLookup[self.selectedAxis][12].From
+		
+		local handPos = self.lineLookup[self.selectedAxis][13].From
+		
+		local mouseDir = self.selectedAxis == 1 and headObject.recentHand.id == "r" and (Vector2.new(-mousePos.x + (handPos.x * 2), mousePos.y) - handPos).unit or (mousePos - handPos).unit
+		-- mouse angle relating to the red circle is reflected on the right hand, so i "re-reflect" it. bad practice
+		
+		local circleDir = (circlePos - handPos).unit
+		
+		local rotationTheta = angleBetween(mouseDir, circleDir)
+		
+		local direction = mouseDir:Cross(circleDir)
+		
+		rotationTheta = direction > 0 and rotationTheta or (2 * math.pi) - rotationTheta
+		
+		if rotationTheta == rotationTheta then
+			headObject.recentHand.rotation[self.selectedAxis] = math.floor(6 * rotationTheta / math.pi)
+			
+			local hand = headObject.recentHand
+			
+			hand.targetPosition *= CFrame.Angles(hand.targetPosition:inverse():ToEulerAnglesXYZ()) * hand:calculateEndRotation()
+			hand.replicatePosition:Fire()
+		end
+	end
+end
+
+function head:new(realHeadset)
+	local newHead = setmetatable({realHeadset = realHeadset}, head)
+	
+	newHead.leftHand = hand:new(false, realHeadset.lHand)
+	newHead.rightHand = hand:new(true, realHeadset.rHand)
+	newHead.canOffset = false
+	newHead.recentHand = newHead.leftHand
+	newHead.handOffset = 0
+	newHead.handAngle = math.pi / 4
+	
+	newHead.rotationManager = rotation:new()
+	
+	newHead.chatRemote = debug.getupvalue(realHeadset.ButtonPressed, 3)
+	
+	cam:GetPropertyChangedSignal("CameraSubject"):connect(function()
+		if cam.CameraSubject ~= headObject.realHeadset.Head then
+			cam.CameraType = Enum.CameraType.Custom
+		end
+	end)
+	
+	services.UserInputService.WindowFocused:connect(function()
+		newHead.realHeadset.StickPosition = Vector3.new(0, 0, 0)
+		newHead.realHeadset.Stick2 = 0
+	end)
+	
+	return newHead
+end
+
 local ind, nc, nind
-
-local events = {}
-
-local cfs = {
-	[Enum.UserCFrame.Head] = CFrame.new(0, 0, 0),
-	[Enum.UserCFrame.LeftHand] = CFrame.new(-1, 0, -1),
-	[Enum.UserCFrame.RightHand] = CFrame.new(1, 0, -1)
-
-}
 
 local realVrService = game:GetService("VRService")
 
@@ -86,7 +379,7 @@ local fakeVrService = setmetatable({
 		return true
 	end,
 	GetUserCFrame = function(cf)
-		return cfs[cf] or CFrame.new(0, 0, 0)
+		return CFrame.new()
 	end
 
 }, {
@@ -99,28 +392,18 @@ local fakeVrService = setmetatable({
 					t.Function = f
 
 					if t.Name == "UserCFrameChanged" then
-						headset = debug.getupvalue(t.Function, 1)
-
-						debug.setupvalue(headset.UpdateHand, 5, setmetatable({}, {
-							__index = function(t, k)
-								return cam[k]
-							end,
-							__newindex = function(t, k, v)
-								if cam.CameraType == Enum.CameraType.Scriptable and p then -- unfortunately the first time this will run may or may not be before the cameratype is set
-									cam.CameraType = Enum.CameraType.Custom
-									cam.CameraSubject = headset.Head
-								end
-
-								if k ~= "CFrame" then -- fuck you
-									cam[k] = v
-								end
-							end
-						}))
+						headObject = head:new(debug.getupvalue(t.Function, 1))
 						
-						cam:GetPropertyChangedSignal("CameraSubject"):connect(function()
-							if cam.CameraSubject ~= headset.Head then
-								cam.CameraSubject = headset.Head
-							end
+						services.UserInputService.InputBegan:connect(function(i)
+							headObject:handleInput(i, 1)
+						end)
+
+						services.UserInputService.InputChanged:connect(function(i)
+							headObject:handleInput(i, i.UserInputType == Enum.UserInputType.MouseWheel and i.Position.z or 0)
+						end)
+
+						services.UserInputService.InputEnded:connect(function(i)
+							headObject:handleInput(i, -1)
 						end)
 					end
 
@@ -158,6 +441,8 @@ nc = hookmetamethod(game, "__namecall", function(...)
 	if t == realVrService then
 		local method = getnamecallmethod()
 		return fakeVrService(method, ...)
+	elseif t == game.GetService(game, "StarterGui") and game.IsLoaded(game) then
+		return
 	end
 
 	return nc(...)
@@ -165,79 +450,45 @@ end)
 
 nind = hookmetamethod(game, "__newindex", function(...)
 	local t, k, v = ...
-
-	if t == cam and k == "CFrame" and events.UserCFrameChanged then
-		events.UserCFrameChanged:Fire(Enum.UserCFrame.Head, CFrame.Angles(cam.CFrame:ToEulerAnglesXYZ()))
+	
+	local scr = getcallingscript()
+	
+	if t == cam and headObject then	
+		if k == "CFrame" and events.UserCFrameChanged then
+		
+			events.UserCFrameChanged:Fire(Enum.UserCFrame.Head, CFrame.Angles(cam.CFrame:ToEulerAnglesXYZ()))
+			
+			if headObject.rotationManager.active then
+			
+				headObject.rotationManager:updateAxes()
+				
+				if headObject.rotationManager.held then
+					headObject.rotationManager:updateAxisMover()
+				end
+			end
+			
+			if headObject.rotationManager.tabActivated and services.UserInputService:IsKeyDown(Enum.KeyCode.Left) or services.UserInputService:IsKeyDown(Enum.KeyCode.Right) then -- prevent controls from messing with camera
+				return
+			end
+		elseif k == "CameraType" then
+			nind(t, k, Enum.CameraType.Custom)
+			nind(t, "CameraSubject", headObject.realHeadset.Head)
+			headObject.leftHand:updateTarget()
+			headObject.rightHand:updateTarget()
+		end
+		if not (scr and scr.Name == "CameraModule") and not checkcaller() then
+			return
+		end
 	end
-
+	
 	nind(t, k, v)
 end)
 
-
-
-uis.InputBegan:connect(function(i) -- also least favorite
-	if headset then
-		if i.UserInputType == Enum.UserInputType.Keyboard then
-			body(i.KeyCode)
-		elseif i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.MouseButton2 or i.UserInputType == Enum.UserInputType.MouseButton3 then
-			body(i.UserInputType)
-		end
-	end
-end)
-
-uis.InputEnded:connect(function(i)
-	if headset then
-		if i.UserInputType == Enum.UserInputType.Keyboard then
-			body(i.KeyCode, -1)
-		elseif i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.MouseButton2 or i.UserInputType == Enum.UserInputType.MouseButton3 then
-			body(i.UserInputType, -1)
-		end
-	end
-end)
-
-rs:BindToRenderStep(game:GetService("HttpService"):GenerateGUID(), Enum.RenderPriority.Camera.Value - 1, function() -- at least it works
-	if events.UserCFrameChanged and headset then	
-		local mpos = uis:GetMouseLocation()
-
-		local cursordir = cam:ViewportPointToRay(mpos.x, mpos.y).Direction
-
-		body.lHand[3] = body.lHand[1] and math.clamp(body.lHand[3] + 0.05, 0, 1) or body.lHand[3] > 0 and math.clamp(body.lHand[3] - 0.05, 0, 1) or body.lHand[3]
-		body.rHand[3] = body.rHand[1] and math.clamp(body.rHand[3] + 0.05, 0, 1) or body.rHand[3] > 0 and math.clamp(body.rHand[3] - 0.05, 0, 1) or body.rHand[3]
-
-		local theta = math.acos(Vector3.new(-1, 0, 0):Dot((cam.CFrame.LookVector * Vector3.new(1, 0, 1)).unit))
-
-		theta = cam.CFrame.LookVector.z > 0 and (2 * math.pi) - theta or theta
-
-
-		body.lHand[2] = CFrame.new(-math.cos(theta - (math.pi / 4)), -0.5, -math.sin(theta - (math.pi / 4)))
-		body.rHand[2] = CFrame.new(-math.cos(theta + (math.pi / 4)), -0.5, -math.sin(theta + (math.pi / 4)))
-		
-		local lcf = ((body.lHand[2]):lerp(CFrame.new(cursordir * 100 / cam.HeadScale), body.lHand[3]))
-		local rcf = ((body.rHand[2]):lerp(CFrame.new(cursordir * 100 / cam.HeadScale), body.rHand[3]))
-
-		events.UserCFrameChanged:Fire(Enum.UserCFrame.LeftHand, lcf * CFrame.Angles(cam.CFrame:ToEulerAnglesXYZ()))
-		events.UserCFrameChanged:Fire(Enum.UserCFrame.RightHand, rcf * CFrame.Angles(cam.CFrame:ToEulerAnglesXYZ()))
-	end
-end)
-
-p = plyrs.LocalPlayer or (function()
-	plyrs:GetPropertyChangedSignal("LocalPlayer"):wait() -- this doesnt return anything for some reason??
-	return plyrs.LocalPlayer
+p = services.Players.LocalPlayer or (function()
+	services.Players:GetPropertyChangedSignal("LocalPlayer"):wait() -- this doesnt return anything for some reason??
+	return services.Players.LocalPlayer
 end)()
 
-local library = loadstring(game:HttpGet(('https://raw.githubusercontent.com/bloodball/-back-ups-for-libs/main/wall%20v3')))()
-
-local w = library:CreateWindow("TEST") -- Creates the window
-
-local b = w:CreateFolder("VR hands") -- Creates the folder(U will put here your buttons,etc)
-
-b:Label("Vr Test!",{
-    TextSize = 25; -- Self Explaining
-    TextColor = Color3.fromRGB(255,255,255); -- Self Explaining
-    BgColor = Color3.fromRGB(69,69,69); -- Self Explaining
-    
-})
-
-b:Button("Keyboard",function()
-   loadstring(game:HttpGet("https://raw.githubusercontent.com/advxzivhsjjdhxhsidifvsh/mobkeyboard/main/main.txt", true))()
+p.Chatted:connect(function(c)
+	services.ReplicatedStorage.COM.Chat:FireServer("Chat", c)
 end)
