@@ -4,10 +4,10 @@ local headObject
 local events = {}
 
 local controls = {
-	[Enum.KeyCode.F] = {"move", "leftHand"},
+	[Enum.UserInputType.MouseButton1] = {"move", "leftHand"},
 	[Enum.UserInputType.MouseMovement] = {"updateTarget"}, -- do not change
 	[Enum.UserInputType.MouseWheel] = {"adjustOffset"},
-	[Enum.KeyCode.G] = {"move", "rightHand"},
+	[Enum.UserInputType.MouseButton2] = {"move", "rightHand"},
 	[Enum.KeyCode.W] = {"move", "head", Vector3.new(0, 1, 0)},
 	[Enum.KeyCode.A] = {"move", "head", Vector3.new(-1, 0, 0)},
 	[Enum.KeyCode.S] = {"move", "head", Vector3.new(0, -1, 0)},
